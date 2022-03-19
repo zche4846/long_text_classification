@@ -16,8 +16,8 @@ import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
 
-from ..attention_utils import _convert_param_attr_to_list
-from .. import PretrainedModel, register_base_model
+from paddlenlp.transformers.attention_utils import _convert_param_attr_to_list
+from paddlenlp.transformers import PretrainedModel, register_base_model
 
 __all__ = [
     'ErnieDocModel',
@@ -311,6 +311,7 @@ class ErnieDocEncoder(nn.Layer):
                 enc_input = encoder_layer(enc_input, memories[i], rel_pos, rel_task,
                                           attn_mask)
                 memories[i] = self._cache_mem(enc_input, memories[i])
+                paddle.device.cuda.empty_cache() #TODO test static mode inferencing
             return enc_input, memories
 
 
