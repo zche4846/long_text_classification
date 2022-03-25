@@ -1,69 +1,64 @@
 import os
 import paddle
-from functools import partial
 from paddlenlp.utils.env import PPNLP_HOME
 from paddlenlp.utils.log import logger
 from paddlenlp.taskflow.utils import dygraph_mode_guard, static_mode_guard
-from paddlenlp.transformers import ErnieDocForSequenceClassification
+from model.modeling import ErnieDocForSequenceClassification
 from paddlenlp.transformers import ErnieDocTokenizer
 from paddlenlp.datasets import load_dataset
 from data import ClassifierIterator, to_json_file
 import paddle.nn as nn
-from train import init_memory
 
 def predict(model,
             test_dataloader,
             file_path,
-            memories0,
+            memories,
             label_list,
             static_mode,
             input_handles=None,
             output_handles=None):
 
-    if static_mode and (input_handles is None) or (output_handles is None):
+    if static_mode and ((input_handles is None) or (output_handles is None)):
         raise ValueError("Static model inference requires specified input_handles and output_handles")
 
     label_dict = dict()
-    memories=list(memories0)
     if not static_mode:
-        with dygraph_mode_guard():
-            model.eval()
-            for _, batch in enumerate(test_dataloader, start=1):
-                input_ids, position_ids, token_type_ids, attn_mask, _, qids, \
-                gather_idxs, need_cal_loss = batch
-                logits, memories = model(input_ids, memories, token_type_ids,
-                                         position_ids, attn_mask)
-                logits, qids = list(
-                    map(lambda x: paddle.gather(x, gather_idxs),
-                        [logits, qids]))
-                probs = nn.functional.softmax(logits, axis=1)
-                idx = paddle.argmax(probs, axis=1).numpy()
-                idx = idx.tolist()
-                labels = [label_list[i] for i in idx]
-                for i, qid in enumerate(qids.numpy().flatten()):
-                    label_dict[str(qid)] = labels[i]
+        model.eval()
+        for _, batch in enumerate(test_dataloader, start=1):
+            input_ids, position_ids, token_type_ids, attn_mask, _, qids, \
+            gather_idxs, need_cal_loss = batch
+            logits, memories = model(input_ids, memories, token_type_ids,
+                                     position_ids, attn_mask)
+            logits, qids = list(
+                map(lambda x: paddle.gather(x, gather_idxs),
+                    [logits, qids]))
+            probs = nn.functional.softmax(logits, axis=1)
+            idx = paddle.argmax(probs, axis=1).numpy()
+            idx = idx.tolist()
+            labels = [label_list[i] for i in idx]
+            for i, qid in enumerate(qids.numpy().flatten()):
+                label_dict[str(qid)] = labels[i]
     else:
-        with static_mode_guard():
-            for _, batch in enumerate(test_dataloader, start=1):
-                input_ids, position_ids, token_type_ids, attn_mask, _, qids, \
-                gather_idxs, need_cal_loss = batch
-                input_handles[0].copy_from_cpu(input_ids.numpy())
-                input_handles[1].copy_from_cpu(paddle.to_tensor(memories).numpy())
-                input_handles[2].copy_from_cpu(token_type_ids.numpy())
-                input_handles[3].copy_from_cpu(position_ids.numpy())
-                input_handles[4].copy_from_cpu(attn_mask.numpy())
-                model.run()
-                logits = output_handles[0]
-                memories = output_handles[1]
-                logits, qids = list(
-                    map(lambda x: paddle.gather(x, gather_idxs),
-                        [logits, qids]))
-                probs = nn.functional.softmax(logits, axis=1)
-                idx = paddle.argmax(probs, axis=1).numpy()
-                idx = idx.tolist()
-                labels = [label_list[i] for i in idx]
-                for i, qid in enumerate(qids.numpy().flatten()):
-                    label_dict[str(qid)] = labels[i]
+        for _, batch in enumerate(test_dataloader, start=1):
+            input_ids, position_ids, token_type_ids, attn_mask, _, qids, \
+            gather_idxs, need_cal_loss = batch
+            input_handles[0].copy_from_cpu(input_ids.numpy())
+            input_handles[1].copy_from_cpu(paddle.to_tensor(memories).numpy())
+            input_handles[2].copy_from_cpu(token_type_ids.numpy())
+            input_handles[3].copy_from_cpu(position_ids.numpy())
+            input_handles[4].copy_from_cpu(attn_mask.numpy())
+            model.run()
+            logits = paddle.to_tensor(output_handles[0].copy_to_cpu())
+            memories = paddle.to_tensor(output_handles[1].copy_to_cpu())
+            logits, qids = list(
+                map(lambda x: paddle.gather(x, gather_idxs),
+                    [logits, qids]))
+            probs = nn.functional.softmax(logits, axis=1)
+            idx = paddle.argmax(probs, axis=1).numpy()
+            idx = idx.tolist()
+            labels = [label_list[i] for i in idx]
+            for i, qid in enumerate(qids.numpy().flatten()):
+                label_dict[str(qid)] = labels[i]
     to_json_file("iflytek", label_dict, file_path)
 
 class LongDocClassifier:
@@ -84,7 +79,6 @@ class LongDocClassifier:
         self.kwargs = kwargs
         self.static_path = self.kwargs[
             'static_path'] if 'static_path' in self.kwargs else PPNLP_HOME
-
 
         self._construct_tokenizer()
         self._input_preparation()
@@ -129,7 +123,7 @@ class LongDocClassifier:
         model_instance = ErnieDocForSequenceClassification.from_pretrained(self.model_name_or_path,
                                                                            num_classes=self.num_classes,
                                                                            static_mode=self.static_mode)
-        self.model_config = model_instance.config
+        self.model_config = model_instance.ernie_doc.config
         self._model = model_instance
 
     def _load_static_model(self, params_path=None):
@@ -174,7 +168,7 @@ class LongDocClassifier:
         """
         Construct the input spec for the convert dygraph model to static model.
         """
-        B, T, H, M, N = self.batch_size, 128, 768, 128, 12
+        B, T, H, M, N = self.batch_size, 512, 768, 128, 12
         self._input_spec = [
             paddle.static.InputSpec(shape=[B, T, 1],
                                     dtype="int64",
@@ -207,14 +201,14 @@ class LongDocClassifier:
         logger.info("The inference model save in the path:{}".format(save_path))
 
     def run_model(self, saved_path):
-        self._model.eval()
-        create_memory = partial(init_memory, self.batch_size, self.memory_len,
-                                self.model_config["hidden_size"],
-                                self.model_config["num_hidden_layers"])
-        # Copy the memory
-        memories = create_memory()
+        memories = paddle.zeros(
+            [12, 16, 128, 768], dtype="float32")
         file_path = saved_path
-        predict(self._model, self.test_dataloader, file_path, memories, self.label_list, self.static_mode)
+        if not self.static_mode:
+            predict(self._model, self.test_dataloader, file_path, memories, self.label_list, self.static_mode)
+        else:
+            predict(self.predictor, self.test_dataloader, file_path, memories, self.label_list, self.static_mode, self.input_handles, self.output_handle)
+
 
 if __name__ == "__main__":
     # Initialize model
@@ -231,4 +225,4 @@ if __name__ == "__main__":
                                   trainer_num=trainer_num,
                                   rank=trainer_num,
                                   static_mode=True)
-    predictor.run_model()
+    # predictor.run_model()

@@ -273,7 +273,7 @@ class ErnieDocEncoderLayer(nn.Layer):
 
 
 class ErnieDocEncoder(nn.Layer):
-    def __init__(self, num_layers, encoder_layer, mem_len, static_mode):
+    def __init__(self, num_layers, encoder_layer, mem_len, static_mode): #TODO remove static option in modeling
         super(ErnieDocEncoder, self).__init__()
         self.layers = nn.LayerList([(
             encoder_layer
@@ -297,22 +297,24 @@ class ErnieDocEncoder(nn.Layer):
 
     def forward(self, enc_input, memories, rel_pos, rel_task, attn_mask):
         # no need to normalize enc_input, cause it's already normalized outside.
-        if not self.static_mode:
-            new_mem = []
-            for i, encoder_layer in enumerate(self.layers):
-                # free the old memories explicitly to save gpu memory
-                enc_input = encoder_layer(enc_input, memories[i], rel_pos, rel_task,
-                                          attn_mask)
-                new_mem += [self._cache_mem(enc_input, memories[i])]
-            memories[i] = None  # TODO 静态图slice
-            return enc_input, new_mem
-        else:
-            for i, encoder_layer in enumerate(self.layers):
-                enc_input = encoder_layer(enc_input, memories[i], rel_pos, rel_task,
-                                          attn_mask)
-                memories[i] = self._cache_mem(enc_input, memories[i])
-                paddle.device.cuda.empty_cache() #TODO test static mode inferencing
-            return enc_input, memories
+        new_mem = None
+        for i, encoder_layer in enumerate(self.layers):
+            enc_input = encoder_layer(enc_input, memories[0], rel_pos, rel_task,
+                                      attn_mask)
+            if new_mem is None:
+                new_mem = paddle.unsqueeze(self._cache_mem(enc_input, memories[0]), axis=0)
+            else:
+                new_mem = paddle.concat([new_mem, paddle.unsqueeze(self._cache_mem(enc_input, memories[0]), axis=0)],
+                                        axis=0)
+            sign = memories.shape[0]
+            if sign > 1:
+                axis = [0]
+                start = [1]
+                end = [memories.shape[0]]
+                memories = paddle.slice(memories, axes=axis, starts=start, ends=end)
+            else:
+                memories = None
+        return enc_input, new_mem
 
 
 class ErnieDocPretrainedModel(PretrainedModel):
