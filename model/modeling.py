@@ -273,7 +273,7 @@ class ErnieDocEncoderLayer(nn.Layer):
 
 
 class ErnieDocEncoder(nn.Layer):
-    def __init__(self, num_layers, encoder_layer, mem_len, static_mode): #TODO remove static option in modeling
+    def __init__(self, num_layers, encoder_layer, mem_len):
         super(ErnieDocEncoder, self).__init__()
         self.layers = nn.LayerList([(
             encoder_layer
@@ -282,7 +282,6 @@ class ErnieDocEncoder(nn.Layer):
         self.num_layers = num_layers
         self.normalize_before = self.layers[0].normalize_before
         self.mem_len = mem_len
-        self.static_mode = static_mode
 
     def _cache_mem(self, curr_out, prev_mem):
         if self.mem_len is None or self.mem_len == 0:
@@ -523,8 +522,7 @@ class ErnieDocModel(ErnieDocPretrainedModel):
                  rel_pos_params_sharing=False,
                  initializer_range=0.02,
                  pad_token_id=0,
-                 cls_token_idx=-1,
-                 static_mode=False):
+                 cls_token_idx=-1):
         super(ErnieDocModel, self).__init__()
 
         r_w_bias, r_r_bias, r_t_bias = None, None, None
@@ -556,7 +554,7 @@ class ErnieDocModel(ErnieDocPretrainedModel):
         self.d_model = hidden_size
         self.memory_len = memory_len
         self.encoder = ErnieDocEncoder(num_hidden_layers, encoder_layer,
-                                       memory_len, static_mode)
+                                       memory_len)
         self.pad_token_id = pad_token_id
         self.embeddings = ErnieDocEmbeddings(
             vocab_size, hidden_size, hidden_dropout_prob, memory_len,

@@ -13,18 +13,16 @@ import time
 import numpy as np
 import paddle
 import paddle.nn as nn
-from paddle.io import DataLoader
 from paddle.metric import Accuracy
-from paddlenlp.transformers import ErnieDocModel
 from paddlenlp.transformers import ErnieDocForSequenceClassification
-from paddlenlp.transformers import ErnieDocBPETokenizer, ErnieDocTokenizer
+from paddlenlp.transformers import ErnieDocTokenizer
 from paddlenlp.transformers import LinearDecayWithWarmup
 from paddlenlp.utils.log import logger
 from paddlenlp.datasets import load_dataset
 from paddlenlp.ops.optimizer import AdamWDL
-from predict import predict
-from data import ClassifierIterator, ImdbTextPreprocessor, HYPTextPreprocessor, to_json_file
-from metrics import F1
+
+from data import ClassifierIterator, to_json_file
+# from metrics import F1
 
 seed = 1
 random.seed(seed)
@@ -32,18 +30,13 @@ np.random.seed(seed)
 paddle.seed(seed)
 
 def init_memory(batch_size, memory_length, d_model, n_layers):
-    return [
-        paddle.zeros(
-            [batch_size, memory_length, d_model], dtype="float32")
-        for _ in range(n_layers)
-    ]
+    return paddle.zeros([n_layers, batch_size, memory_length, d_model], dtype="float32")
 
 @paddle.no_grad()
-def evaluate(model, metric, data_loader, memories0):
+def evaluate(model, metric, data_loader, memories):
     model.eval()
     losses = []
     # copy the memory
-    memories = list(memories0)
     tic_train = time.time()
     eval_logging_step = 500
 
@@ -95,6 +88,25 @@ def evaluate(model, metric, data_loader, memories0):
     metric.reset()
     model.train()
     return acc_or_f1
+
+def predict(model, test_dataloader, file_path, memories, label_list):
+    label_dict = dict()
+    model.eval()
+    for _, batch in enumerate(test_dataloader, start=1):
+        input_ids, position_ids, token_type_ids, attn_mask, _, qids, \
+        gather_idxs, need_cal_loss = batch
+        logits, memories = model(input_ids, memories, token_type_ids,
+                                 position_ids, attn_mask)
+        logits, qids = list(
+            map(lambda x: paddle.gather(x, gather_idxs),
+                [logits, qids]))
+        probs = nn.functional.softmax(logits, axis=1)
+        idx = paddle.argmax(probs, axis=1).numpy()
+        idx = idx.tolist()
+        labels = [label_list[i] for i in idx]
+        for i, qid in enumerate(qids.numpy().flatten()):
+            label_dict[str(qid)] = labels[i]
+    to_json_file("iflytek", label_dict, file_path)
 
 tokenizer_class, eval_name, test_name, preprocess_text_fn, eval_metric = ErnieDocTokenizer, "dev", "test", None, Accuracy()
 

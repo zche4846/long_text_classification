@@ -8,6 +8,8 @@ from paddlenlp.transformers import ErnieDocTokenizer
 from paddlenlp.datasets import load_dataset
 from data import ClassifierIterator, to_json_file
 import paddle.nn as nn
+from train import init_memory
+from functools import partial
 
 def predict(model,
             test_dataloader,
@@ -82,11 +84,10 @@ class LongDocClassifier:
 
         self._construct_tokenizer()
         self._input_preparation()
+        self._construct_model()
         if static_mode:
+            logger.info("Loading the static model")
             self._load_static_model()
-        else:
-            self._construct_model()
-        pass
 
     def _input_preparation(self, dataset="iflytek", preprocess_text_fn=None):
         test_ds = load_dataset("clue", name=dataset, splits=["test"])
@@ -121,8 +122,7 @@ class LongDocClassifier:
         :return: model instance
         """
         model_instance = ErnieDocForSequenceClassification.from_pretrained(self.model_name_or_path,
-                                                                           num_classes=self.num_classes,
-                                                                           static_mode=self.static_mode)
+                                                                           num_classes=self.num_classes)
         self.model_config = model_instance.ernie_doc.config
         self._model = model_instance
 
@@ -138,6 +138,8 @@ class LongDocClassifier:
                     self._model.set_dict(state_dict)
                 self._construct_input_spec()
                 self._convert_dygraph_to_static()
+        else:
+            logger.info("loading static model from {}".format(inference_model_path))
         model_file = inference_model_path + ".pdmodel"
         params_file = inference_model_path + ".pdiparams"
         self._config = paddle.inference.Config(model_file, params_file)
@@ -168,7 +170,7 @@ class LongDocClassifier:
         """
         Construct the input spec for the convert dygraph model to static model.
         """
-        B, T, H, M, N = self.batch_size, 512, 768, 128, 12
+        B, T, H, M, N = self.batch_size, self.max_seq_length, 768, 128, 12
         self._input_spec = [
             paddle.static.InputSpec(shape=[B, T, 1],
                                     dtype="int64",
@@ -201,8 +203,11 @@ class LongDocClassifier:
         logger.info("The inference model save in the path:{}".format(save_path))
 
     def run_model(self, saved_path):
-        memories = paddle.zeros(
-            [12, 16, 128, 768], dtype="float32")
+        create_memory = partial(init_memory, self.batch_size, self.memory_len,
+                                self.model_config["hidden_size"],
+                                self.model_config["num_hidden_layers"])
+        # Copy the memory
+        memories = create_memory()
         file_path = saved_path
         if not self.static_mode:
             predict(self._model, self.test_dataloader, file_path, memories, self.label_list, self.static_mode)
@@ -213,6 +218,7 @@ class LongDocClassifier:
 if __name__ == "__main__":
     # Initialize model
     # paddle.set_device(args.device)
+    res_file_path = "./test_data_res.json"
     trainer_num = paddle.distributed.get_world_size()
     if trainer_num > 1:
         paddle.distributed.init_parallel_env()
@@ -225,4 +231,4 @@ if __name__ == "__main__":
                                   trainer_num=trainer_num,
                                   rank=trainer_num,
                                   static_mode=True)
-    # predictor.run_model()
+    predictor.run_model(saved_path=res_file_path)
