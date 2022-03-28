@@ -19,8 +19,9 @@ parser.add_argument("--max_seq_length", type=int, default=512, help="The maximum
 parser.add_argument("--memory_length", type=int, default=128, help="Length of the retained previous heads.")
 parser.add_argument("--device", type=str, default="gpu", choices=["cpu", "gpu"], help="Select cpu, gpu devices to train model.")
 parser.add_argument("--test_results_file", default="./test_restuls.json", type=str, help="The file path you would like to save the model ouputs on test dataset.")
-parser.add_argument("--static_model", default=False, type=bool, help="Whether you would like to perform predictions on static model or dynamic model.")
+parser.add_argument("--static_mode", default=False, type=bool, help="Whether you would like to perform predicting by static model or dynamic model.")
 parser.add_argument("--dataset", default="iflytek", choices=["imdb", "iflytek", "thucnews", "hyp"], type=str, help="The training dataset")
+parser.add_argument("--static_path", default=None, type=str, help="The path which your static model is at or where you want to save after converting.")
 
 args = parser.parse_args()
 DATASET_INFO = {
@@ -39,9 +40,6 @@ def predict(model,
             static_mode,
             input_handles=None,
             output_handles=None):
-
-    if static_mode and ((input_handles is None) or (output_handles is None)):
-        raise ValueError("Static model inference requires specified input_handles and output_handles")
 
     label_dict = dict()
     if not static_mode:
@@ -101,7 +99,7 @@ class LongDocClassifier:
         self.static_mode = static_mode
         self.kwargs = kwargs
         self.static_path = self.kwargs[
-            'static_path'] if 'static_path' in self.kwargs else PPNLP_HOME
+            'static_path'] if 'static_path' in self.kwargs and not None else PPNLP_HOME
 
         tokenizer_class, test_name, preprocess_text_fn = DATASET_INFO[dataset]
         self._construct_tokenizer(tokenizer_class)
@@ -110,7 +108,7 @@ class LongDocClassifier:
                                 preprocess_text_fn)
         self._construct_model()
         if static_mode:
-            logger.info("Loading the static model")
+            logger.info("Loading the static model from {}".format(self.static_path))
             self._load_static_model()
 
     def _input_preparation(self, dataset="iflytek", test_name="test", preprocess_text_fn=None):
@@ -234,9 +232,15 @@ class LongDocClassifier:
         memories = create_memory()
         file_path = saved_path
         if not self.static_mode:
-            predict(self._model, self.test_dataloader, file_path, memories, self.label_list, self.static_mode)
-        else:
-            predict(self.predictor, self.test_dataloader, file_path, memories, self.label_list, self.static_mode, self.input_handles, self.output_handle)
+            self.input_handles, self.output_handle = None, None
+        predict(self.predictor,
+                self.test_dataloader,
+                file_path,
+                memories,
+                self.label_list,
+                self.static_mode,
+                self.input_handles,
+                self.output_handle)
 
 def do_predict(args):
     # Initialize model
@@ -255,7 +259,8 @@ def do_predict(args):
                                   batch_size=args.batch_size,
                                   max_seq_length=args.max_seq_length,
                                   memory_len=args.memory_length,
-                                  static_mode=args.static_mode)
+                                  static_mode=args.static_mode,
+                                  static_path=args.static_path)
     predictor.run_model(saved_path=args.test_results_file)
 
 if __name__ == "__main__":

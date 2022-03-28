@@ -147,9 +147,11 @@ class MultiHeadAttention(nn.Layer):
         return out
 
     def _combine_heads(self, x):
-        sign = len(x.shape) == 3  # 直接使用len(tensor.shape)当作if判断条件，在paddle.jit.save保存静态模型时会出现判断失效的问题
+        sign = len(x.shape) == 3
+        # Directly using len(tensor.shape) as an if condition
+        # would not act functionally when applying paddle.jit.save api to save static graph.
         if sign: return x
-        sign = len(x.shape) != 4  # 直接使用len(tensor.shape)当作if判断条件，在paddle.jit.save保存静态模型时会出现判断失效的问题
+        sign = len(x.shape) != 4
         if sign:
             raise ValueError("Input(x) should be a 4-D Tensor.")
         # x shape: [B, N, T, HH]
@@ -160,7 +162,7 @@ class MultiHeadAttention(nn.Layer):
     def forward(self, queries, keys, values, rel_pos, rel_task, memory,
                 attn_mask):
         sign = memory is not None and len(
-            memory.shape) > 1  # 直接使用len(tensor.shape)当作if判断条件，在paddle.jit.save保存静态模型时会出现判断失效的问题
+            memory.shape) > 1
         if sign:
             cat = paddle.concat([memory, queries], 1)
         else:
@@ -169,7 +171,7 @@ class MultiHeadAttention(nn.Layer):
 
         sign = (len(queries.shape) == len(keys.shape) == len(values.shape) \
                 == len(rel_pos.shape) == len(
-                    rel_task.shape) == 3)  # 直接使用len(tensor.shape)当作if判断条件，在paddle.jit.save保存静态模型时会出现判断失效的问题
+                    rel_task.shape) == 3)
 
         if not sign:
             raise ValueError(
@@ -298,7 +300,8 @@ class ErnieDocEncoder(nn.Layer):
         # no need to normalize enc_input, cause it's already normalized outside.
         new_mem = None
         for _, encoder_layer in enumerate(self.layers):
-            # Since in static mode, the memories should be set as tensor, so we use paddle.slice to free the old memories explicitly to save gpu memory.
+            # Since in static mode, the memories should be set as tensor,
+            # so we use paddle.slice to free the old memories explicitly to save gpu memory.
             enc_input = encoder_layer(enc_input, memories[0], rel_pos, rel_task,
                                       attn_mask)
             if new_mem is None:
