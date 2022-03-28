@@ -165,7 +165,6 @@ class LongDocClassifier:
         model_file = inference_model_path + ".pdmodel"
         params_file = inference_model_path + ".pdiparams"
         self._config = paddle.inference.Config(model_file, params_file)
-        self._prepare_static_mode()
 
     def _prepare_static_mode(self):
         """
@@ -233,6 +232,8 @@ class LongDocClassifier:
         file_path = saved_path
         if not self.static_mode:
             self.input_handles, self.output_handle = None, None
+        else:
+            self._prepare_static_mode()
         predict(self.predictor,
                 self.test_dataloader,
                 file_path,
