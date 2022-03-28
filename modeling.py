@@ -297,7 +297,8 @@ class ErnieDocEncoder(nn.Layer):
     def forward(self, enc_input, memories, rel_pos, rel_task, attn_mask):
         # no need to normalize enc_input, cause it's already normalized outside.
         new_mem = None
-        for i, encoder_layer in enumerate(self.layers):
+        for _, encoder_layer in enumerate(self.layers):
+            # Since in static mode, the memories should be set as tensor, so we use paddle.slice to free the old memories explicitly to save gpu memory.
             enc_input = encoder_layer(enc_input, memories[0], rel_pos, rel_task,
                                       attn_mask)
             if new_mem is None:

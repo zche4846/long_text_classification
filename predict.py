@@ -2,8 +2,8 @@ import os
 import paddle
 from paddlenlp.utils.env import PPNLP_HOME
 from paddlenlp.utils.log import logger
-from paddlenlp.taskflow.utils import dygraph_mode_guard, static_mode_guard
-from model.modeling import ErnieDocForSequenceClassification
+from paddlenlp.taskflow.utils import dygraph_mode_guard
+from modeling import ErnieDocForSequenceClassification
 from paddlenlp.transformers import ErnieDocTokenizer
 from paddlenlp.datasets import load_dataset
 from data import ClassifierIterator, to_json_file
@@ -170,7 +170,7 @@ class LongDocClassifier:
         """
         Construct the input spec for the convert dygraph model to static model.
         """
-        B, T, H, M, N = self.batch_size, self.max_seq_length, 768, 128, 12
+        B, T, H, M, N = self.batch_size, self.max_seq_length, self.model_config["hidden_size"], self.memory_len, self.model_config["num_hidden_layers"]
         self._input_spec = [
             paddle.static.InputSpec(shape=[B, T, 1],
                                     dtype="int64",
@@ -217,7 +217,7 @@ class LongDocClassifier:
 
 if __name__ == "__main__":
     # Initialize model
-    # paddle.set_device(args.device)
+    paddle.set_device("gpu")
     res_file_path = "./test_data_res.json"
     trainer_num = paddle.distributed.get_world_size()
     if trainer_num > 1:

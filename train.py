@@ -10,7 +10,7 @@ import numpy as np
 import paddle
 import paddle.nn as nn
 from paddle.metric import Accuracy
-from paddlenlp.transformers import ErnieDocForSequenceClassification
+from modeling import ErnieDocForSequenceClassification
 from paddlenlp.transformers import ErnieDocTokenizer
 from paddlenlp.transformers import LinearDecayWithWarmup
 from paddlenlp.utils.log import logger
