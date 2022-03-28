@@ -11,12 +11,13 @@ import paddle
 import paddle.nn as nn
 from paddle.metric import Accuracy
 from modeling import ErnieDocForSequenceClassification
-from paddlenlp.transformers import ErnieDocTokenizer
+from paddlenlp.transformers import ErnieDocTokenizer, ErnieDocBPETokenizer
 from paddlenlp.transformers import LinearDecayWithWarmup
 from paddlenlp.utils.log import logger
 from paddlenlp.datasets import load_dataset
 from paddlenlp.ops.optimizer import AdamWDL
-from data import ClassifierIterator, to_json_file
+from data import ClassifierIterator, ImdbTextPreprocessor, HYPTextPreprocessor, to_json_file
+from metrics import F1
 
 
 parser = argparse.ArgumentParser()
@@ -39,6 +40,15 @@ parser.add_argument("--max_steps", default=-1, type=int, help="If > 0: set total
 parser.add_argument("--test_results_file", default="./test_restuls.json", type=str, help="The file path you would like to save the model ouputs on test dataset.")
 
 args = parser.parse_args()
+
+DATASET_INFO = {
+    "imdb":
+    (ErnieDocBPETokenizer, "test", "test", ImdbTextPreprocessor(), Accuracy()),
+    "hyp": (ErnieDocBPETokenizer, "dev", "test", HYPTextPreprocessor(), F1()),
+    "iflytek": (ErnieDocTokenizer, "dev", "test", None, Accuracy()),
+    "thucnews": (ErnieDocTokenizer, "dev", "test", None, Accuracy())
+}
+
 
 def set_seed(args):
     # Use the same data seed(for data shuffle) for all procs to guarantee data
@@ -131,7 +141,8 @@ def predict(model, test_dataloader, file_path, memories, label_list):
 def do_train(args):
     set_seed(args)
 
-    tokenizer_class, eval_name, test_name, preprocess_text_fn, eval_metric = ErnieDocTokenizer, "dev", "test", None, Accuracy()
+    tokenizer_class, eval_name, test_name, preprocess_text_fn, eval_metric = DATASET_INFO[
+        args.dataset]
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
     train_ds, eval_ds, test_ds = load_dataset(
         "clue", name=args.dataset, splits=["train", eval_name, test_name])
@@ -273,7 +284,7 @@ def do_train(args):
                                     create_memory())
                 # Save
                 if rank == 0:
-                    output_dir = os.path.join(output_dir,
+                    output_dir = os.path.join(args.output_dir,
                                                 "model_%d" % (global_steps))
                     if not os.path.exists(output_dir):
                         os.makedirs(output_dir)

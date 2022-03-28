@@ -4,12 +4,32 @@ from paddlenlp.utils.env import PPNLP_HOME
 from paddlenlp.utils.log import logger
 from paddlenlp.taskflow.utils import dygraph_mode_guard
 from modeling import ErnieDocForSequenceClassification
-from paddlenlp.transformers import ErnieDocTokenizer
+from paddlenlp.transformers import ErnieDocTokenizer, ErnieDocBPETokenizer
 from paddlenlp.datasets import load_dataset
-from data import ClassifierIterator, to_json_file
+from data import ClassifierIterator, ImdbTextPreprocessor, HYPTextPreprocessor, to_json_file
 import paddle.nn as nn
 from train import init_memory
 from functools import partial
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--batch_size", default=16, type=int, help="Batch size per GPU/CPU for predicting (In static mode, it should be the same as in model training process.)")
+parser.add_argument("--model_name_or_path", type=str, default="ernie-doc-base-zh", help="Pretraining or finetuned model name or path")
+parser.add_argument("--max_seq_length", type=int, default=512, help="The maximum total input sequence length after SentencePiece tokenization.")
+parser.add_argument("--memory_length", type=int, default=128, help="Length of the retained previous heads.")
+parser.add_argument("--device", type=str, default="gpu", choices=["cpu", "gpu"], help="Select cpu, gpu devices to train model.")
+parser.add_argument("--test_results_file", default="./test_restuls.json", type=str, help="The file path you would like to save the model ouputs on test dataset.")
+parser.add_argument("--static_model", default=False, type=bool, help="Whether you would like to perform predictions on static model or dynamic model.")
+parser.add_argument("--dataset", default="iflytek", choices=["imdb", "iflytek", "thucnews", "hyp"], type=str, help="The training dataset")
+
+args = parser.parse_args()
+DATASET_INFO = {
+    "imdb":
+    (ErnieDocBPETokenizer, "test", ImdbTextPreprocessor()),
+    "hyp": (ErnieDocBPETokenizer, "test", HYPTextPreprocessor()),
+    "iflytek": (ErnieDocTokenizer, "test", None),
+    "thucnews": (ErnieDocTokenizer, "test", None)
+}
 
 def predict(model,
             test_dataloader,
@@ -70,6 +90,7 @@ class LongDocClassifier:
                  max_seq_length=512,
                  memory_len=128,
                  static_mode=False,
+                 dataset = "iflytek",
                  **kwargs):
         self.model_name_or_path = model_name_or_path
         self.batch_size = batch_size
@@ -82,15 +103,18 @@ class LongDocClassifier:
         self.static_path = self.kwargs[
             'static_path'] if 'static_path' in self.kwargs else PPNLP_HOME
 
-        self._construct_tokenizer()
-        self._input_preparation()
+        tokenizer_class, test_name, preprocess_text_fn = DATASET_INFO[dataset]
+        self._construct_tokenizer(tokenizer_class)
+        self._input_preparation(args.dataset,
+                                test_name,
+                                preprocess_text_fn)
         self._construct_model()
         if static_mode:
             logger.info("Loading the static model")
             self._load_static_model()
 
-    def _input_preparation(self, dataset="iflytek", preprocess_text_fn=None):
-        test_ds = load_dataset("clue", name=dataset, splits=["test"])
+    def _input_preparation(self, dataset="iflytek", test_name="test", preprocess_text_fn=None):
+        test_ds = load_dataset("clue", name=dataset, splits=[test_name])
         self.label_list = test_ds.label_list
         self.num_classes = len(test_ds.label_list)
         self.test_ds_iter = ClassifierIterator(
@@ -107,12 +131,12 @@ class LongDocClassifier:
             capacity=70, return_list=True)
         self.test_dataloader.set_batch_generator(self.test_ds_iter, paddle.get_device())
 
-    def _construct_tokenizer(self):
+    def _construct_tokenizer(self, tokenizer_class):
         """
         Construct the tokenizer for the predictor.
         :return:
         """
-        tokenizer_instance = ErnieDocTokenizer.from_pretrained(self.model_name_or_path)
+        tokenizer_instance = tokenizer_class.from_pretrained(self.model_name_or_path)
         self._tokenizer = tokenizer_instance
 
     def _construct_model(self):
@@ -214,21 +238,25 @@ class LongDocClassifier:
         else:
             predict(self.predictor, self.test_dataloader, file_path, memories, self.label_list, self.static_mode, self.input_handles, self.output_handle)
 
-
-if __name__ == "__main__":
+def do_predict(args):
     # Initialize model
-    paddle.set_device("gpu")
-    res_file_path = "./test_data_res.json"
+    paddle.set_device(args.device)
     trainer_num = paddle.distributed.get_world_size()
     if trainer_num > 1:
         paddle.distributed.init_parallel_env()
     rank = paddle.distributed.get_rank()
-    model_name_or_path = "ernie-doc-base-zh"
     if rank == 0:
-        if os.path.exists(model_name_or_path):
-            logger.info("init checkpoint from %s" % model_name_or_path)
-    predictor = LongDocClassifier(model_name_or_path=model_name_or_path,
+        if os.path.exists(args.model_name_or_path):
+            logger.info("init checkpoint from %s" % args.model_name_or_path)
+
+    predictor = LongDocClassifier(model_name_or_path=args.model_name_or_path,
+                                  rank=rank,
                                   trainer_num=trainer_num,
-                                  rank=trainer_num,
-                                  static_mode=True)
-    predictor.run_model(saved_path=res_file_path)
+                                  batch_size=args.batch_size,
+                                  max_seq_length=args.max_seq_length,
+                                  memory_len=args.memory_length,
+                                  static_mode=args.static_mode)
+    predictor.run_model(saved_path=args.test_results_file)
+
+if __name__ == "__main__":
+    do_predict(args)
